@@ -1,0 +1,3 @@
+#!/bin/sh -e
+
+cp "$SNAP/etc/signaling-server.conf.sample" "$SNAP_COMMON/signaling-server.conf"

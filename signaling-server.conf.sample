@@ -1,0 +1,38 @@
+server: {
+  front-port: 5554
+  back-port: 5654
+  http-port: 5080
+#  loopback-only: false
+}
+
+stun: {
+#  server: ""
+}
+
+turn: {
+#  server: "
+#  username: "
+#  credential: ""
+#  static-auth-secret: ""
+#  password-ttl: ""
+}
+
+turns: {
+#  server: "
+#  username: "
+#  credential: ""
+#  static-auth-secret: ""
+#  password-ttl: ""
+}
+
+sources: (
+  {
+    name: "source1"
+    token: ""
+  }
+)
+
+debug: {
+#  log-level: 3
+#  lws-log-level: 2
+}

@@ -1,0 +1,72 @@
+name: webrtsp-signaling-server
+base: core18
+summary: WebRTSP signaling server
+adopt-info: server
+description: |
+  WebRTSP signaling server
+license: GPL-3.0
+grade: devel
+confinement: strict
+
+architectures:
+  - build-on: amd64
+  - build-on: i386
+  - build-on: armhf
+
+environment:
+  LD_LIBRARY_PATH: $SNAP/opt/${SNAP_NAME}/lib
+
+layout:
+  /opt/webrtsp-signaling-server/lib:
+    symlink: $SNAP/opt/webrtsp-signaling-server/lib
+
+parts:
+  lws:
+    plugin: cmake
+    source-type: git
+    source: https://github.com/warmcat/libwebsockets.git
+    source-branch: v4.1-stable
+    configflags:
+      - -DLWS_WITHOUT_TESTAPPS=ON
+      - -DLWS_WITH_GLIB=ON
+      - -DCMAKE_INSTALL_PREFIX=/opt/${SNAPCRAFT_PROJECT_NAME}
+    build-packages:
+      - libssl-dev
+    stage-packages:
+      - libssl1.1
+  www:
+    source: https://github.com/WebRTSP/BrowserClient.git
+    plugin: dump
+    organize:
+      'css/*.css': www/css/
+      '*.mjs': www/
+      '*.js': www/
+      '*.html': www/
+  server:
+    plugin: cmake
+    source-type: git
+    source: https://github.com/WebRTSP/SignalingServer.git
+    build-environment:
+      - PKG_CONFIG_PATH: $SNAPCRAFT_STAGE/opt/${SNAPCRAFT_PROJECT_NAME}/lib/pkgconfig:$PKG_CONFIG_PATH
+    override-pull: |
+        snapcraftctl pull
+        snapcraftctl set-version "$(git describe --always)"
+    after:
+      - lws
+      - www
+    build-packages:
+      - g++
+      - make
+      - libspdlog-dev
+      - libconfig-dev
+      - libgstreamer1.0-dev
+      - libgstreamer-plugins-bad1.0-dev
+    stage-packages:
+      - libconfig9
+apps:
+  server:
+    command: SignalingServer
+    daemon: simple
+    plugs:
+      - network-bind
+      - network
