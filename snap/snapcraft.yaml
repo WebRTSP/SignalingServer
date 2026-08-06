@@ -1,72 +1,98 @@
 name: webrtsp-signaling-server
-base: core18
-summary: WebRTSP signaling server
+base: core24
+summary: Server for WebRTSP messaging between clients
 adopt-info: server
 description: |
-  WebRTSP signaling server
+  Enables remote access to WebRTSP agents located behind NAT.
+
+  **Config file location:** /var/snap/webrtsp-signaling-server/common/signaling-server.conf
 license: GPL-3.0
-grade: devel
+grade: stable
 confinement: strict
 
-architectures:
-  - build-on: amd64
-  - build-on: i386
-  - build-on: armhf
-
-environment:
-  LD_LIBRARY_PATH: $SNAP/opt/${SNAP_NAME}/lib
-
-layout:
-  /opt/webrtsp-signaling-server/lib:
-    symlink: $SNAP/opt/webrtsp-signaling-server/lib
+platforms:
+  amd64:
+  arm64:
 
 parts:
-  lws:
-    plugin: cmake
-    source-type: git
-    source: https://github.com/warmcat/libwebsockets.git
-    source-branch: v4.1-stable
-    configflags:
-      - -DLWS_WITHOUT_TESTAPPS=ON
-      - -DLWS_WITH_GLIB=ON
-      - -DCMAKE_INSTALL_PREFIX=/opt/${SNAPCRAFT_PROJECT_NAME}
+  coturn:
+    plugin: autotools
+    source: https://github.com/coturn/coturn.git
+    source-branch: 4.17.2
+    build-environment:
+      - TURN_NO_SYSTEMD: "yes"
+      - TURN_NO_MYSQL: "yes"
+      - TURN_NO_PQ: "yes"
+      - TURN_NO_MYSQL: "yes"
+      - TURN_NO_MONGO: "yes"
+      - TURN_NO_HIREDIS: "yes"
+      - TURN_NO_PROMETHEUS: "yes"
+    autotools-configure-parameters:
+      - --prefix=/opt/coturn
+      - --turndb=/var/snap/${SNAPCRAFT_PROJECT_NAME}/common
     build-packages:
-      - libssl-dev
+      - libevent-dev
+      - libsqlite3-dev
     stage-packages:
-      - libssl1.1
-  www:
-    source: https://github.com/WebRTSP/BrowserClient.git
+      - libevent-2.1-7
+      - libevent-core-2.1-7
+      - libevent-extra-2.1-7
+      - libevent-openssl-2.1-7
+      - libevent-pthreads-2.1-7
+  coturn.sh:
     plugin: dump
+    source: .
     organize:
-      'css/*.css': www/css/
-      '*.mjs': www/
-      '*.js': www/
-      '*.html': www/
+        coturn.sh: opt/coturn/bin/
+    stage:
+        - opt/coturn/bin/coturn.sh
   server:
     plugin: cmake
     source-type: git
-    source: https://github.com/WebRTSP/SignalingServer.git
-    build-environment:
-      - PKG_CONFIG_PATH: $SNAPCRAFT_STAGE/opt/${SNAPCRAFT_PROJECT_NAME}/lib/pkgconfig:$PKG_CONFIG_PATH
+    source: .
+    cmake-generator: Ninja
+    cmake-parameters:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DCMAKE_INSTALL_PREFIX=/opt/${SNAPCRAFT_PROJECT_NAME}
     override-pull: |
-        snapcraftctl pull
-        snapcraftctl set-version "$(git describe --always)"
-    after:
-      - lws
-      - www
+        craftctl default
+        craftctl set version="$(git describe --always)"
+    build-snaps:
+      - node/24/stable
     build-packages:
       - g++
-      - make
+      - ninja-build
+      - libglib2.0-dev
       - libspdlog-dev
       - libconfig-dev
-      - libgstreamer1.0-dev
-      - libgstreamer-plugins-bad1.0-dev
+      - libwebsockets-dev
+      - libnice-dev
+      - libmicrohttpd-dev
     stage-packages:
       - libconfig9
+      - libspdlog1.12
+      - libwebsockets19t64
+      - libwebsockets-evlib-glib
+      - libnice10
+      - libmicrohttpd12
+      - pwgen
 apps:
-  server:
-    command: SignalingServer
+  SignalingServer:
+    command: opt/${SNAPCRAFT_PROJECT_NAME}/bin/SignalingServer
     daemon: simple
     plugs:
       - network-bind
       - network
+    restart-delay: 3s
+    environment:
+      PATH: $SNAP/opt/coturn/bin:${PATH}
+  Coturn:
+    command: opt/coturn/bin/coturn.sh
+    daemon: simple
+    plugs:
+      - network-bind
+      - network
+    install-mode: disable
+    restart-delay: 3s
+    after:
+      - SignalingServer

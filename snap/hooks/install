@@ -1,3 +1,6 @@
 #!/bin/sh -e
 
-cp "$SNAP/etc/signaling-server.conf.sample" "$SNAP_COMMON/signaling-server.conf"
+umask 027
+
+cp "${SNAP}/opt/coturn/etc/turnserver.conf.default" "${SNAP_COMMON}/turnserver.conf"
+cp "${SNAP}/opt/${SNAP_NAME}/etc/signaling-server.conf.sample" "${SNAP_COMMON}/signaling-server.conf"

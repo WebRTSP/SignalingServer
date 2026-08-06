@@ -1,43 +1,54 @@
-#include <deque>
+#include <sys/stat.h>
 
 #include <glib.h>
 
 #include <libwebsockets.h>
 
+#include "CxxPtr/GlibPtr.h"
+#include "CxxPtr/libwebsocketsPtr.h"
 #include "CxxPtr/libconfigDestroy.h"
 
-#include "Common/ConfigHelpers.h"
-#include "Common/LwsLog.h"
+#include "Helpers/ConfigHelpers.h"
+#include "Helpers/LwsLog.h"
 
+#include "RtspSession/Log.h"
+#include "RtspSession/Session.h"
+#include "Signalling/Log.h"
+#include "Signalling/Config.h"
+#include "Signalling/WsServer.h"
 #include "Http/Log.h"
 #include "Http/Config.h"
-
-#include "Signalling/Log.h"
+#include "Http/HttpMicroServer.h"
 
 #include "Log.h"
-#include "SignalingServer.h"
+#include "Config.h"
+#include "stun.h"
+#include "SessionsSharedData.h"
+#include "Session.h"
+#include "AgentSession.h"
 
 
-static const auto Log = SignalingServerLog;
+namespace
+{
+
+const auto Log = SignalingServerLog;
 
 
-static bool LoadConfig(Config* config)
+bool LoadConfig(Config* config, http::Config* httpConfig)
 {
     const std::deque<std::string> configDirs = ::ConfigDirs();
     if(configDirs.empty())
         return false;
 
     Config loadedConfig = *config;
+    http::Config loadedHttpConfig = *httpConfig;
 
-    bool someConfigFound = false;
     for(const std::string& configDir: configDirs) {
         const std::string configFile = configDir + "/signaling-server.conf";
         if(!g_file_test(configFile.c_str(), G_FILE_TEST_IS_REGULAR)) {
             Log()->info("Config \"{}\" not found", configFile);
             continue;
         }
-
-        someConfigFound = true;
 
         config_t config;
         config_init(&config);
@@ -52,113 +63,35 @@ static bool LoadConfig(Config* config)
             return false;
         }
 
-        config_setting_t* serverConfig = config_lookup(&config, "server");
-        if(serverConfig && CONFIG_TRUE == config_setting_is_group(serverConfig)) {
-            int frontPort = 0;
-            if(CONFIG_TRUE == config_setting_lookup_int(serverConfig, "front-port", &frontPort)) {
-                loadedConfig.frontPort = static_cast<unsigned short>(frontPort);
-            }
-            int backPort = 0;
-            if(CONFIG_TRUE == config_setting_lookup_int(serverConfig, "back-port", &backPort)) {
-                loadedConfig.backPort = static_cast<unsigned short>(backPort);
-            }
-            int httpPort = 0;
-            if(CONFIG_TRUE == config_setting_lookup_int(serverConfig, "http-port", &httpPort)) {
-                loadedConfig.httpConfig.port = static_cast<unsigned short>(httpPort);
-            }
-            int loopbackOnly = false;
-            if(CONFIG_TRUE == config_setting_lookup_bool(serverConfig, "loopback-only", &loopbackOnly)) {
-                loadedConfig.httpConfig.bindToLoopbackOnly = loopbackOnly != false;
-                loadedConfig.bindToLoopbackOnly = loopbackOnly != false;
+        const char* wwwRoot = nullptr;
+        if(CONFIG_TRUE == config_lookup_string(&config, "www-root", &wwwRoot)) {
+            loadedHttpConfig.wwwRoot = wwwRoot;
+        }
+
+        int wsPort;
+        if(CONFIG_TRUE == config_lookup_int(&config, "ws-port", &wsPort))
+            loadedConfig.port = static_cast<unsigned short>(wsPort);
+
+        int httpPort = 0;
+        if(CONFIG_TRUE == config_lookup_int(&config, "http-port", &httpPort))
+            loadedHttpConfig.port = static_cast<unsigned short>(httpPort);
+
+        int loopbackOnly;
+        if(CONFIG_TRUE == config_lookup_bool(&config, "loopback-only", &loopbackOnly)) {
+            loadedConfig.bindToLoopbackOnly = loopbackOnly != FALSE;
+            loadedHttpConfig.bindToLoopbackOnly = loopbackOnly != FALSE;
+        }
+
+        const char* stunServer;
+        if(CONFIG_TRUE == config_lookup_string(&config, "stun-server", &stunServer)) {
+            const std::string_view stunPrefix = "stun://";
+            if(0 == g_ascii_strncasecmp(stunServer, stunPrefix.data(), stunPrefix.size())) {
+                loadedConfig.stunServer = stunServer;
+            } else {
+                Log()->error("STUN server URL should start with \"{}\"", stunPrefix);
             }
         }
 
-        config_setting_t* stunServerConfig = config_lookup(&config, "stun");
-        if(stunServerConfig && CONFIG_TRUE == config_setting_is_group(stunServerConfig)) {
-            const char* server = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(stunServerConfig, "server", &server)) {
-                loadedConfig.stunServer = server;
-            }
-        }
-
-        config_setting_t* turnServerConfig = config_lookup(&config, "turn");
-        if(turnServerConfig && CONFIG_TRUE == config_setting_is_group(turnServerConfig)) {
-            const char* server = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnServerConfig, "server", &server)) {
-                loadedConfig.turnServer = server;
-            }
-            const char* username = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnServerConfig, "username", &username)) {
-                loadedConfig.turnUsername = username;
-            }
-            const char* credential = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnServerConfig, "credential", &credential)) {
-                loadedConfig.turnCredential = credential;
-            }
-            const char* secret = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnServerConfig, "static-auth-secret", &secret)) {
-                loadedConfig.turnStaticAuthSecret = secret;
-            }
-            int passwordTTL = 0;
-            if(CONFIG_TRUE == config_setting_lookup_int(turnServerConfig, "password-ttl", &passwordTTL)) {
-                if(passwordTTL > 0)
-                    loadedConfig.turnPasswordTTL = passwordTTL;
-            }
-        }
-
-        config_setting_t* turnsServerConfig = config_lookup(&config, "turns");
-        if(turnsServerConfig && CONFIG_TRUE == config_setting_is_group(turnsServerConfig)) {
-            const char* server = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnsServerConfig, "server", &server)) {
-                loadedConfig.turnsServer = server;
-            }
-            const char* username = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnsServerConfig, "username", &username)) {
-                loadedConfig.turnsUsername = username;
-            }
-            const char* credential = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnsServerConfig, "credential", &credential)) {
-                loadedConfig.turnsCredential = credential;
-            }
-            const char* secret = nullptr;
-            if(CONFIG_TRUE == config_setting_lookup_string(turnsServerConfig, "static-auth-secret", &secret)) {
-                loadedConfig.turnsStaticAuthSecret = secret;
-            }
-            int passwordTTL = 0;
-            if(CONFIG_TRUE == config_setting_lookup_int(turnsServerConfig, "password-ttl", &passwordTTL)) {
-                if(passwordTTL > 0)
-                    loadedConfig.turnsPasswordTTL = passwordTTL;
-            }
-        }
-
-        config_setting_t* sourcesConfig = config_lookup(&config, "sources");
-        if(sourcesConfig && CONFIG_TRUE == config_setting_is_list(sourcesConfig)) {
-            const int sourcesCount = config_setting_length(sourcesConfig);
-            for(int sourceIdx = 0; sourceIdx < sourcesCount; ++sourceIdx) {
-                config_setting_t* sourceConfig =
-                    config_setting_get_elem(sourcesConfig, sourceIdx);
-                if(!sourceConfig || CONFIG_FALSE == config_setting_is_group(sourceConfig)) {
-                    Log()->warn("Wrong source config format. Source skipped.");
-                    break;
-                }
-
-                const char* name;
-                if(CONFIG_FALSE == config_setting_lookup_string(sourceConfig, "name", &name)) {
-                    Log()->warn("Missing source name. Source skipped.");
-                    break;
-                }
-
-                const char* token;
-                if(CONFIG_FALSE == config_setting_lookup_string(sourceConfig, "token", &token)) {
-                    Log()->warn(
-                        "Missing auth token for source \"{}\". Source skipped.",
-                        name);
-                    break;
-                }
-
-                loadedConfig.backAuthTokens.emplace(name, token);
-            }
-        }
         config_setting_t* debugConfig = config_lookup(&config, "debug");
         if(debugConfig && CONFIG_TRUE == config_setting_is_group(debugConfig)) {
             int logLevel = 0;
@@ -180,42 +113,373 @@ static bool LoadConfig(Config* config)
         }
     }
 
-    if(!someConfigFound)
-        return false;
-
     bool success = true;
 
-    if(!loadedConfig.frontPort) {
-        Log()->error("Missing \"server.front-port\"");
-        success = false;
-    }
-
-    if(!loadedConfig.backPort) {
-        Log()->error("Missing \"server.back-port\"");
-        success = false;
-    }
-
-    if(success)
+    if(success) {
         *config = loadedConfig;
+        *httpConfig = loadedHttpConfig;
+    }
 
     return success;
 }
 
+struct ServerSessionFactory: public WsServer::SessionFactory
+{
+    ServerSessionFactory(
+        const Config* config,
+        SessionsSharedData* sharedData
+    ) : config(config), sharedData(sharedData) {}
+
+    std::unique_ptr<rtsp::Session> createSession(
+        std::optional<std::string>&& authCookie,
+        const rtsp::Session::SendRequest& sendRequest,
+        const rtsp::Session::SendResponse& sendResponse) noexcept override
+    {
+        return std::make_unique<Session>(
+            sharedData,
+            sendRequest,
+            sendResponse);
+    }
+
+    std::unique_ptr<rtsp::Session> createAgentSession(
+        std::string&& /*clientId*/,
+        std::string&& agentId,
+        const rtsp::Session::SendRequest& sendRequest,
+        const rtsp::Session::SendResponse& sendResponse) noexcept override
+    {
+        return std::make_unique<AgentSession>(
+            config,
+            sharedData,
+            std::move(agentId),
+            sendRequest,
+            sendResponse);
+    }
+
+private:
+    const Config *const config;
+    SessionsSharedData *const sharedData;
+};
+
+#ifdef SNAPCRAFT_BUILD
+bool StopCoturn(bool disable)
+{
+    g_autoptr(GError) error = nullptr;
+    gint exitStatus = 0;
+
+    const gchar* snapName = g_getenv("SNAP_NAME");
+    if(!snapName) {
+        Log()->error("Can't get SNAP_NAME environment variable");
+
+        return false;
+    }
+
+    g_autofree gchar* command =
+        disable ?
+            g_strdup_printf("snapctl stop %s.Coturn --disable", snapName) :
+            g_strdup_printf("snapctl stop %s.Coturn", snapName);
+    if(!g_spawn_command_line_sync(
+        command,
+        nullptr,
+        nullptr,
+        &exitStatus,
+        &error) ||
+        !g_spawn_check_wait_status(exitStatus, &error))
+    {
+        Log()->error(
+            fmt::runtime(
+                disable ?
+                    "Failed to disable Coturn: {}" :
+                    "Failed to stop Coturn: {}"),
+            error->message);
+
+        return false;
+    }
+
+    Log()->info(
+        disable ?
+            "Coturn disabled" :
+            "Coturn stopped");
+
+    return true;
+}
+
+void ConfigureCoturn(Config* config)
+{
+    const gchar* snapName = g_getenv("SNAP_NAME");
+    if(!snapName) {
+        Log()->error("Can't get SNAP_NAME environment variable");
+
+        return;
+    }
+
+    const gchar* snapCommon = g_getenv("SNAP_COMMON");
+    if(!snapCommon) {
+        Log()->error("Can't get SNAP_COMMON environment variable");
+
+        return;
+    }
+
+    g_autoptr(GError) error = nullptr;
+    gint exitStatus = 0;
+
+    g_autofree gchar* setPublicIPCommand = nullptr;
+    if(config->publicIp.has_value())
+        setPublicIPCommand = g_strdup_printf("snapctl set public-ip=%s", config->publicIp->c_str());
+    const gchar* unsetPublicIPCommand = "snapctl unset public-ip";
+    if(!g_spawn_command_line_sync(
+        setPublicIPCommand ? setPublicIPCommand : unsetPublicIPCommand,
+        nullptr,
+        nullptr,
+        &exitStatus,
+        &error) ||
+        !g_spawn_check_wait_status(exitStatus, &error))
+    {
+        Log()->error("Failed to set \"public-ip\": {}", error->message);
+
+        return;
+    }
+
+    g_autofree gchar* pwgenStdout = nullptr;
+    if(!g_spawn_command_line_sync(
+        "pwgen --secure --capitalize 127",
+        &pwgenStdout,
+        nullptr,
+        &exitStatus,
+        &error) ||
+        !g_spawn_check_wait_status(exitStatus, &error))
+    {
+        Log()->error("Failed to generate TURN REST API secret", error->message);
+
+        return;
+    }
+
+    std::string staticAuthSecret = pwgenStdout;
+    if(staticAuthSecret.back() == '\n')
+        staticAuthSecret.pop_back();
+
+    g_autofree gchar* deleteSecretsCmd = g_strdup_printf(
+        "turnadmin --db=%s/turndb --delete-all-secret --realm=%s",
+        snapCommon,
+        snapName);
+
+    if(!g_spawn_command_line_sync(
+        deleteSecretsCmd,
+        nullptr,
+        nullptr,
+        &exitStatus,
+        &error) ||
+        !g_spawn_check_wait_status(exitStatus, &error))
+    {
+        Log()->error("Failed to delete old TURN REST API secrets: {}", error->message);
+
+        return;
+    }
+
+    g_autofree gchar* setSecretCmd = g_strdup_printf(
+        "turnadmin --db=%s/turndb --set-secret=%s --realm=%s",
+        snapCommon,
+        staticAuthSecret.c_str(),
+        snapName);
+
+    if(!g_spawn_command_line_sync(
+        setSecretCmd,
+        nullptr,
+        nullptr,
+        &exitStatus,
+        &error) ||
+        !g_spawn_check_wait_status(exitStatus, &error))
+    {
+        Log()->error("Failed to set TURN REST API secret: {}", error->message);
+
+        return;
+    }
+
+    g_autofree gchar* startCommand =
+        g_strdup_printf("snapctl start %s.Coturn", snapName);
+    if(!g_spawn_command_line_sync(
+        startCommand,
+        nullptr,
+        nullptr,
+        &exitStatus,
+        &error) ||
+        !g_spawn_check_wait_status(exitStatus, &error))
+    {
+        Log()->error("Failed to enable Coturn: {}", error->message);
+
+        return;
+    }
+
+    Log()->info("Coturn configured and started");
+
+    config->turnStaticAuthSecret = std::move(staticAuthSecret);
+}
+#endif
+
+}
+
 int main(int argc, char *argv[])
 {
+    g_set_prgname("org.webrtsp.signaling-server");
+
+    umask(S_IWGRP | S_IRWXO); // rwxr-x---
+
+    {
+        g_autofree gchar* clientId = nullptr;
+        GOptionEntry optionEntries[] = {
+            {
+                "generate-credentials",
+                'g',
+                0,
+                G_OPTION_ARG_STRING,
+                &clientId,
+                "Generate new Agent ID and Access Token pair for the specified Client ID",
+                "<CLIENT_ID>"
+            },
+            { nullptr }
+        };
+
+        g_autoptr(GOptionContext) optionContext = g_option_context_new(nullptr);
+        g_option_context_add_main_entries(optionContext, optionEntries, nullptr);
+        g_autoptr(GError) optionError = nullptr;
+        if(!g_option_context_parse(optionContext, &argc, &argv, &optionError)) {
+            Log()->error("Failed to parse command line options: {}", optionError->message);
+            return -1;
+        }
+
+        if(clientId) {
+            AgentsDb agentsDb;
+            if(!agentsDb.isOpen()) {
+                Log()->error("Failed to open Agents DB");
+                return -1;
+            }
+
+            std::optional<AgentsDb::AgentCredentials> credentials =
+                agentsDb.registerAgent(clientId);
+            if(!credentials.has_value()) {
+                Log()->error("Failed to generate Agent credentials");
+                return -1;
+            }
+
+            printf(
+                "Agent ID: %s\n"
+                "Access token: %s\n",
+                credentials->agentId.c_str(),
+                credentials->accessToken.c_str());
+
+            return 0;
+        }
+    }
+
     Config config {};
-    config.httpConfig.bindToLoopbackOnly = false;
-#ifdef SNAPCRAFT_BUILD
-    if(const gchar* snapPath = g_getenv("SNAP"))
-        config.httpConfig.wwwRoot = std::string(snapPath) + "/www";
+    http::Config httpConfig {};
+    httpConfig.indexPaths.try_emplace("/", false);
+    httpConfig.indexPaths.try_emplace("/view", false);
+#ifndef NDEBUG
+    config.bindToLoopbackOnly = false;
+    httpConfig.bindToLoopbackOnly = false;
 #endif
-    if(!LoadConfig(&config))
+
+#ifdef SNAPCRAFT_BUILD
+    const gchar* snapPath = g_getenv("SNAP");
+    const gchar* snapName = g_getenv("SNAP_NAME");
+    if(snapPath && snapName) {
+        GCharPtr wwwRootPtr(g_build_path(G_DIR_SEPARATOR_S, snapPath, "opt", snapName, "www", NULL));
+        httpConfig.wwwRoot = wwwRootPtr.get();
+    }
+#endif
+
+    if(!LoadConfig(&config, &httpConfig))
         return -1;
 
-    InitLwsLogger(config.lwsLogLevel);
-    InitHttpServerLogger(config.logLevel);
-    InitWsServerLogger(config.logLevel);
-    InitSignalingServerLogger(config.logLevel);
+#ifdef SNAPCRAFT_BUILD
+    const gchar* snapCommon = g_getenv("SNAP_COMMON");
+    if(!g_path_is_absolute(httpConfig.wwwRoot.c_str()) && snapCommon) {
+        GCharPtr wwwRootPtr(g_build_path(G_DIR_SEPARATOR_S, snapCommon, httpConfig.wwwRoot.c_str(), NULL));
+        httpConfig.wwwRoot = wwwRootPtr.get();
+    }
+#endif
 
-    return SignalingServerMain(config);
+#ifdef SNAPCRAFT_BUILD
+    const bool disableCoturn = false;
+    // to workaround "error running snapctl: snap "rtsp-to-webrtsp" has "install-snap" change in progress"
+    // have to try multiple times
+    for(guint i = 0; i <= 3; ++i) {
+        if(i != 0) {
+            const int delay = i;
+            Log()->info("Sleeping for {} seconds before try to disable Coturn another time...", delay);
+            sleep(delay);
+        }
+        if(StopCoturn(disableCoturn))
+            break;
+    }
+#endif
+
+    config.publicIp = DetectPublicIP(config.stunServer);
+
+#if defined(SNAPCRAFT_BUILD) && !defined(BUILD_AS_CAMERA_STREAMER) && !defined(BUILD_AS_V4L2_RESTREAMER)
+    if(!disableCoturn)
+        ConfigureCoturn(&config);
+#endif
+
+    InitLwsLogger(config.lwsLogLevel);
+    InitWsServerLogger(config.logLevel);
+    rtsp::InitSessionLogger(config.logLevel);
+    InitSignalingServerLogger(config.logLevel);
+    InitHttpServerLogger(config.logLevel);
+
+    GMainContextPtr contextPtr(g_main_context_new());
+    GMainContext* context = contextPtr.get();
+    g_main_context_push_thread_default(context);
+
+    GMainLoopPtr loopPtr(g_main_loop_new(context, FALSE));
+    GMainLoop* loop = loopPtr.get();
+    lws_context_creation_info lwsInfo {};
+    lwsInfo.gid = -1;
+    lwsInfo.uid = -1;
+    lwsInfo.options = LWS_SERVER_OPTION_EXPLICIT_VHOSTS;
+#if defined(LWS_WITH_GLIB)
+    lwsInfo.options |= LWS_SERVER_OPTION_GLIB;
+    lwsInfo.foreign_loops = reinterpret_cast<void**>(&loop);
+#endif
+
+    LwsContextPtr lwsContextPtr(lws_create_context(&lwsInfo));
+    lws_context* lwsContext = lwsContextPtr.get();
+
+    SessionsSharedData sessionsSharedData {};
+
+    ServerSessionFactory serverSessionFactory(&config, &sessionsSharedData);
+
+    std::unique_ptr<WsServer> wsServerPtr = std::make_unique<WsServer>(
+        config,
+        &serverSessionFactory,
+        &sessionsSharedData.agentsDb);
+
+    std::unique_ptr<http::MicroServer> httpServerPtr;
+    if(httpConfig.port) {
+        std::string configJs = fmt::format(
+            "const WebRTSPPort = {};\r\n",
+            config.port);
+        if(0 == config.stunServer.compare(0, 7, "stun://")) {
+            std::string iceServer = config.stunServer;
+            iceServer.erase(5, 2); // "stun://..." -> "stun:..."
+            configJs += fmt::format("const STUNServer = \"{}\";\r\n", iceServer);
+        }
+
+        httpServerPtr =
+            std::make_unique<http::MicroServer>(
+                httpConfig,
+                configJs,
+                http::MicroServer::OnNewAuthToken(),
+                context);
+    }
+
+    if(
+        (!wsServerPtr || wsServerPtr->init(loop, lwsContext)) &&
+        (!httpServerPtr || httpServerPtr->init())
+    ) {
+        g_main_loop_run(loop);
+    } else
+        return -1;
+
+    return 0;
 }

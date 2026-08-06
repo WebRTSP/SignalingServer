@@ -1,3 +1,6 @@
 [submodule "WebRTSP"]
 	path = WebRTSP
-	url = https://github.com/WebRTSP/Native.git
+	url = https://github.com/WebRTSP/WebRTSP.git
+[submodule "WebMonitor"]
+	path = WebMonitor
+	url = https://github.com/WebRTSP/WebMonitor.git
