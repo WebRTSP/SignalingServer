@@ -32,6 +32,7 @@ find_package(SQLite3 REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_search_module(SPDLOG REQUIRED spdlog)
 pkg_search_module(LIBCONFIG REQUIRED libconfig)
+pkg_search_module(JANSSON REQUIRED jansson)
 pkg_search_module(LIBNICE REQUIRED nice)
 
 
@@ -52,11 +53,13 @@ target_include_directories(${PROJECT_NAME}
         ${CMAKE_CURRENT_SOURCE_DIR}/WebRTSP
         ${LIBCONFIG_INCLUDE_DIRS}
         ${SPDLOG_INCLUDE_DIRS}
+        ${JANSSON_INCLUDE_DIRS}
         ${LIBNICE_INCLUDE_DIRS}
 )
 target_link_libraries(${PROJECT_NAME}
     ${LIBCONFIG_LIBRARIES}
     ${SPDLOG_LDFLAGS}
+    ${JANSSON_LDFLAGS}
     ${LIBNICE_LDFLAGS}
     SQLite::SQLite3
     Signalling

@@ -15,4 +15,6 @@ struct Config: public WsServerConfig
     std::optional<std::string> publicIp;
 
     std::optional<std::string> turnStaticAuthSecret;
+
+    bool restApiEnabled = false;
 };

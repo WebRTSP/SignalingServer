@@ -2,6 +2,8 @@
 #http-port: 5080
 #loopback-only: true
 
+#api: false
+
 // absolute or relative path
 // (based on %SNAP_COMMON% in case of snap package, or current dir in other cases)
 // to custom web client

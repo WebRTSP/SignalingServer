@@ -26,6 +26,7 @@
 #include "SessionsSharedData.h"
 #include "Session.h"
 #include "AgentSession.h"
+#include "RestApi.h"
 
 
 namespace
@@ -81,6 +82,10 @@ bool LoadConfig(Config* config, http::Config* httpConfig)
             loadedConfig.bindToLoopbackOnly = loopbackOnly != FALSE;
             loadedHttpConfig.bindToLoopbackOnly = loopbackOnly != FALSE;
         }
+
+        int restApiEnabled;
+        if(CONFIG_TRUE == config_lookup_bool(&config, "api", &restApiEnabled))
+            loadedConfig.restApiEnabled = restApiEnabled != FALSE;
 
         const char* stunServer;
         if(CONFIG_TRUE == config_lookup_string(&config, "stun-server", &stunServer)) {
@@ -391,6 +396,9 @@ int main(int argc, char *argv[])
     if(!LoadConfig(&config, &httpConfig))
         return -1;
 
+    if(config.restApiEnabled)
+        httpConfig.apiPrefix = rest::ApiPrefix;
+
 #ifdef SNAPCRAFT_BUILD
     const gchar* snapCommon = g_getenv("SNAP_COMMON");
     if(!g_path_is_absolute(httpConfig.wwwRoot.c_str()) && snapCommon) {
@@ -454,6 +462,7 @@ int main(int argc, char *argv[])
         &serverSessionFactory,
         &sessionsSharedData.agentsDb);
 
+    std::unique_ptr<rest::Context> restContextPtr;
     std::unique_ptr<http::MicroServer> httpServerPtr;
     if(httpConfig.port) {
         std::string configJs = fmt::format(
@@ -465,12 +474,34 @@ int main(int argc, char *argv[])
             configJs += fmt::format("const STUNServer = \"{}\";\r\n", iceServer);
         }
 
-        httpServerPtr =
-            std::make_unique<http::MicroServer>(
-                httpConfig,
-                configJs,
-                http::MicroServer::OnNewAuthToken(),
-                context);
+        if(config.restApiEnabled) {
+            restContextPtr = std::make_unique<rest::Context>();
+            httpServerPtr =
+                std::make_unique<http::MicroServer>(
+                    httpConfig,
+                    configJs,
+                    http::MicroServer::OnNewAuthToken(),
+                    [context = restContextPtr.get()] (MHD_Connection* connection,
+                        http::Method method,
+                        const char* uri,
+                        std::string_view body)
+                    {
+                        return rest::HandleApiRequest(
+                            context,
+                            connection,
+                            method,
+                            uri,
+                            body);
+                    },
+                    context);
+        } else {
+            httpServerPtr =
+                std::make_unique<http::MicroServer>(
+                    httpConfig,
+                    configJs,
+                    http::MicroServer::OnNewAuthToken(),
+                    context);
+        }
     }
 
     if(
