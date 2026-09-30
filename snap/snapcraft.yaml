@@ -68,6 +68,7 @@ parts:
       - libwebsockets-dev
       - libnice-dev
       - libmicrohttpd-dev
+      - libjansson-dev
     stage-packages:
       - libconfig9
       - libspdlog1.12
@@ -75,6 +76,7 @@ parts:
       - libwebsockets-evlib-glib
       - libnice10
       - libmicrohttpd12
+      - libjansson4
       - pwgen
 apps:
   SignalingServer:
