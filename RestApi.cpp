@@ -174,6 +174,11 @@ std::pair<http::StatusCode, MHD_Response*> HandleCredentialsRequest(
     if(method != http::Method::POST)
         return BadRequest();
 
+    Log()->debug(TAG "Credentials requested. path: {}, body: {}, {}",
+        path,
+        body,
+        ClientIpLogString(connection));
+
     if(!path.empty())
         return BadRequest();
 
