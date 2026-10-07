@@ -441,17 +441,6 @@ int main(int argc, char *argv[])
 
     GMainLoopPtr loopPtr(g_main_loop_new(context, FALSE));
     GMainLoop* loop = loopPtr.get();
-    lws_context_creation_info lwsInfo {};
-    lwsInfo.gid = -1;
-    lwsInfo.uid = -1;
-    lwsInfo.options = LWS_SERVER_OPTION_EXPLICIT_VHOSTS;
-#if defined(LWS_WITH_GLIB)
-    lwsInfo.options |= LWS_SERVER_OPTION_GLIB;
-    lwsInfo.foreign_loops = reinterpret_cast<void**>(&loop);
-#endif
-
-    LwsContextPtr lwsContextPtr(lws_create_context(&lwsInfo));
-    lws_context* lwsContext = lwsContextPtr.get();
 
     SessionsSharedData sessionsSharedData {};
 
@@ -505,7 +494,7 @@ int main(int argc, char *argv[])
     }
 
     if(
-        (!wsServerPtr || wsServerPtr->init(loop, lwsContext)) &&
+        (!wsServerPtr || wsServerPtr->init(loop)) &&
         (!httpServerPtr || httpServerPtr->init())
     ) {
         g_main_loop_run(loop);
